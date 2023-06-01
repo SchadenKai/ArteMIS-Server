@@ -23,7 +23,7 @@ exports.calculateMonthlyMiddleware = async (req, res, next) => {
     "October",
     "December",
   ];
-  // calculate the total weight per building
+  // calculate the total weight per building - initialize all buildings
   const registedBuildingList = {};
   // get all building regardless of campus 
   buildingDocs.forEach((campus) => {
@@ -35,55 +35,53 @@ exports.calculateMonthlyMiddleware = async (req, res, next) => {
       }
     });
   });
+  // get list of buildings through the buildingObject pre-set
+   const buildingList = Object.keys(registedBuildingList)
   // count building with data
   let building_count = 1;
-  const buildingList = Object.keys(registedBuildingList);
   buildingList.forEach(building => {
     if(latestMonthDoc[0].buildings[building] != 0) {
       building_count++
     }
   })
-  // add upcoming building data
-  let dayCount = 30;
-  monthDaysWith31Days.forEach((month) => {
-    if (latestMonthDoc[0].id.includes(month)) {
-      dayCount = 31;
-    }
-  });
+ 
+  // get all docs within the month 
   const currentMonth = new Date()
   const q = query(wasteRef, where("createdAt", ">=", new Date(currentMonth.getFullYear(), currentMonth.getMonth(), 1)), where('createdAt', '<=', new Date(currentMonth.getFullYear(), currentMonth.getMonth() + 1, 0)))
   const docs = await CRUD.readAll(q);
   // add all total for each building 
+  let daysCount = 0
   docs.forEach((doc) => { 
     buildingList.forEach((building) => {
       registedBuildingList[building] += doc[building].weight.total
+      // count the number of docs for this latest month
+      daysCount++
     })
   })
 
+  const latestWasteDocs = await getLatest(wasteRef)
+  const buildingTotalWeight = latestWasteDocs[0][reqBuildingName].weight.total;
+  if(buildingTotalWeight != 0) {
+    registedBuildingList[reqBuildingName] -= buildingTotalWeight
+  }
+  registedBuildingList[reqBuildingName] += req.body[reqBuildingName].weight.total
 
-
-
-
-
-
-
-  const preExistingData = latestMonthDoc[0].buildings[reqBuildingName];
-  Object.assign(registedBuildingList, {[reqBuildingName] : preExistingData + req.body[reqBuildingName].weight.total})
-  // compute for the overall weights
+  const statusQuery = query(wasteRef, where("createdAt", ">=", new Date(currentMonth.getFullYear(), currentMonth.getMonth(), 1)), where('createdAt', '<=', new Date(currentMonth.getFullYear(), currentMonth.getMonth() + 1, 0)))
+  const statusDocs = await CRUD.readAll(statusQuery)
   
+  let total_food_waste = req.body.overall_food_waste;
+  let total_recyclable = req.body.overall_recyclable;
+  let total_residual = req.body.overall_residual;
+ 
+  statusDocs.forEach(doc => {
+    total_food_waste += doc.overall_food_waste_weight || 0
+    total_recyclable += doc.overall_recyclable_weight || 0
+    total_residual += doc.overall_residual_weight || 0
+  })
 
-  let total_weight = req.body[reqBuildingName].weight.total;
-  let total_food_waste = req.body[reqBuildingName].weight.food_waste;
-  let total_recyclable = req.body[reqBuildingName].weight.recyclable.total;
-  let total_residual = req.body[reqBuildingName].weight.residual;
-  const averagePerDay = total_weight / dayCount;
+  const total_weight = total_food_waste + total_recyclable + total_residual
+  const averagePerDay = total_weight / daysCount;
 
-  docs.forEach((doc) => {
-    total_weight += doc.overall_weight;
-    total_food_waste += doc.overall_food_waste_weight;
-    total_recyclable += doc.overall_recyclable_weight;
-    total_residual += doc.overall_residual_weight;
-  });
   // update the date with the upcoming request data
   const data = {
     registered_buildings: building_count,
@@ -92,7 +90,7 @@ exports.calculateMonthlyMiddleware = async (req, res, next) => {
       recyclable: total_recyclable,
       residual: total_residual
     },
-    overall_total: total_weight + req.body[reqBuildingName].weight.total,
+    overall_total: total_weight,
     buildings: registedBuildingList,
     average: averagePerDay,
     updatedAt: serverTimestamp(),
